@@ -13,8 +13,20 @@ Local development setup for [Outline](https://www.getoutline.com/) wiki, for Tim
 ## Setup
 
 1. Install mkcert and generate local certificates:
+
+   **macOS:**
    ```bash
    brew install mkcert
+   ```
+
+   **Linux (Debian/Ubuntu):**
+   ```bash
+   sudo apt install libnss3-tools
+   sudo apt install mkcert
+   ```
+
+   **Then generate certs:**
+   ```bash
    mkcert -install
    mkcert localhost
    ```
