@@ -1,0 +1,34 @@
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - ./localhost.pem:/etc/caddy/localhost.pem:ro
+      - ./localhost-key.pem:/etc/caddy/localhost-key.pem:ro
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    volumes:
+      - minio_data:/data
+    env_file: .env
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  outline:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+volumes:
+  minio_data:
