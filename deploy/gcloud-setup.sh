@@ -135,6 +135,7 @@ URL=https://${DOMAIN}
 
 # Outline
 NODE_ENV=production
+APP_NAME=Make Nashville Wiki
 SECRET_KEY=${SECRET_KEY}
 UTILS_SECRET=${UTILS_SECRET}
 PORT=3000
