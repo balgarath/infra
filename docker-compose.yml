@@ -15,9 +15,11 @@ services:
       - outline
 
   outline:
-    image: docker.getoutline.com/outlinewiki/outline:latest
+    image: docker.getoutline.com/outlinewiki/outline:1.4.0
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - ./deploy/S3Storage.js:/opt/outline/build/server/storage/files/S3Storage.js:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,4 +1,10 @@
 localhost {
 	tls /etc/caddy/localhost.pem /etc/caddy/localhost-key.pem
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
 	reverse_proxy outline:3000
 }

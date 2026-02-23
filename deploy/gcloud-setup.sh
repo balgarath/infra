@@ -75,6 +75,20 @@ gcs-bucket="$GCS_BUCKET",\
 slack-client-id="${SLACK_CLIENT_ID:-}",\
 slack-client-secret="${SLACK_CLIENT_SECRET:-}"
 
+    # Update GCS bucket CORS for direct browser uploads
+    echo "Updating GCS bucket CORS..."
+    CORS_FILE=$(mktemp)
+    cat > "$CORS_FILE" << CORS
+[{"origin":["https://${DOMAIN}"],"method":["GET","PUT","POST","DELETE","HEAD"],"responseHeader":["Content-Type","Authorization","Content-MD5","x-goog-resumable"],"maxAgeSeconds":3600}]
+CORS
+    gcloud storage buckets update "gs://$GCS_BUCKET" --cors-file="$CORS_FILE"
+    rm "$CORS_FILE"
+
+    # Upload patched S3Storage.js to server
+    echo "Uploading S3Storage.js patch..."
+    gcloud compute scp "$SCRIPT_DIR/S3Storage.js" "$INSTANCE_NAME:~/S3Storage.js" --zone="$ZONE"
+    gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo mv ~/S3Storage.js /opt/outline/S3Storage.js && sudo chmod 644 /opt/outline/S3Storage.js'
+
     # Re-run configuration on the server
     echo "Applying configuration on server..."
     gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='
@@ -103,6 +117,12 @@ slack-client-secret="${SLACK_CLIENT_SECRET:-}"
         # Update Caddyfile
         sudo tee Caddyfile > /dev/null <<CADDY
 ${DOMAIN} {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
 	reverse_proxy outline:3000
 }
 CADDY
@@ -132,8 +152,10 @@ REDIS_URL=redis://redis:6379
 
 # Storage (Google Cloud Storage)
 FILE_STORAGE=s3
+FILE_STORAGE_UPLOAD_MAX_SIZE=262144000
 AWS_S3_UPLOAD_BUCKET_NAME=${GCS_BUCKET}
 AWS_S3_ACL=private
+
 AWS_ACCESS_KEY_ID=${GCS_ACCESS_KEY}
 AWS_SECRET_ACCESS_KEY=${GCS_SECRET_KEY}
 AWS_REGION=auto
@@ -146,6 +168,63 @@ SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET}
 ENV
 
         sudo chmod 600 .env
+
+        # Update docker-compose.yml to ensure S3Storage.js volume mount is present
+        sudo tee docker-compose.yml > /dev/null <<COMPOSE
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN}
+    depends_on:
+      - outline
+
+  outline:
+    image: docker.getoutline.com/outlinewiki/outline:1.4.0
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./S3Storage.js:/opt/outline/build/server/storage/files/S3Storage.js:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "outline"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+COMPOSE
 
         # Restart services to pick up new config
         echo "Restarting services..."
@@ -204,6 +283,15 @@ gcloud storage buckets create "gs://$GCS_BUCKET" \
     --location="$REGION" \
     --uniform-bucket-level-access \
     2>/dev/null || echo "Bucket already exists or name taken"
+
+# Configure GCS bucket CORS for direct browser uploads
+echo "Configuring GCS bucket CORS..."
+CORS_FILE=$(mktemp)
+cat > "$CORS_FILE" << CORS
+[{"origin":["https://${DOMAIN}"],"method":["GET","PUT","POST","DELETE","HEAD"],"responseHeader":["Content-Type","Authorization","Content-MD5","x-goog-resumable"],"maxAgeSeconds":3600}]
+CORS
+gcloud storage buckets update "gs://$GCS_BUCKET" --cors-file="$CORS_FILE"
+rm "$CORS_FILE"
 
 # Create firewall rules for HTTP/HTTPS
 echo "Creating firewall rules..."

@@ -6,7 +6,7 @@ services:
       - ./localhost-key.pem:/etc/caddy/localhost-key.pem:ro
 
   minio:
-    image: minio/minio
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
     restart: unless-stopped
     volumes:
       - minio_data:/data
