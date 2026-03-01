@@ -1,4 +1,15 @@
+# macOS
+.DS_Store
+
+# Environment files
 .env
 .env.production
-localhost.pem
-localhost-key.pem
+
+# SSL certs
+*.pem
+
+# Deploy keys
+*deploy-key*.json
+
+# Temp files
+*.gstmp
