@@ -111,3 +111,36 @@ else
     fi
     echo "Created notification channel: $CHANNEL_NAME"
 fi
+
+# ============================================
+# Create uptime checks
+# ============================================
+EXISTING_CHECKS=$(gcloud monitoring uptime list-configs --format="value(displayName)" 2>/dev/null || echo "")
+
+for i in "${!CHECK_NAMES[@]}"; do
+    CHECK_NAME="${CHECK_NAMES[$i]}"
+    CHECK_URL="${CHECK_URLS[$i]}"
+
+    if echo "$EXISTING_CHECKS" | grep -q "^${CHECK_NAME}$"; then
+        echo "Uptime check '$CHECK_NAME' already exists — skipping"
+        continue
+    fi
+
+    # Parse host and path from URL
+    CHECK_HOST=$(echo "$CHECK_URL" | sed -E 's|https?://([^/]+).*|\1|')
+    CHECK_PATH=$(echo "$CHECK_URL" | sed -E 's|https?://[^/]+||')
+    CHECK_PATH="${CHECK_PATH:-/}"
+
+    echo "Creating uptime check '$CHECK_NAME' for $CHECK_URL..."
+    gcloud monitoring uptime create "$CHECK_NAME" \
+        --resource-type=uptime-url \
+        --resource-labels=host="$CHECK_HOST",project_id="$PROJECT_ID" \
+        --path="$CHECK_PATH" \
+        --protocol=https \
+        --period=10 \
+        --timeout=10 \
+        --regions=usa-iowa,usa-oregon,usa-virginia \
+        --validate-ssl=true
+
+    echo "Created uptime check: $CHECK_NAME"
+done
