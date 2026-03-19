@@ -77,7 +77,7 @@ echo ""
 # ============================================
 echo "Checking for existing Slack notification channel..."
 
-CHANNELS_RESPONSE=$(curl -s \
+CHANNELS_RESPONSE=$(curl -s --fail-with-body \
     -H "$AUTH_HEADER" \
     "$MONITORING_API/notificationChannels" \
     || { echo "ERROR: Failed to list notification channels"; exit 1; })
@@ -91,7 +91,7 @@ if [[ -n "$EXISTING_CHANNEL" ]]; then
     CHANNEL_NAME="$EXISTING_CHANNEL"
 else
     echo "Creating Slack notification channel..."
-    CHANNEL_RESPONSE=$(curl -s \
+    CHANNEL_RESPONSE=$(curl -s --fail-with-body \
         -X POST \
         -H "$AUTH_HEADER" \
         -H "Content-Type: application/json" \
@@ -151,7 +151,7 @@ done
 echo ""
 echo "Setting up alert policies..."
 
-POLICIES_RESPONSE=$(curl -s \
+POLICIES_RESPONSE=$(curl -s --fail-with-body \
     -H "$AUTH_HEADER" \
     "$MONITORING_API/alertPolicies" \
     || { echo "ERROR: Failed to list alert policies"; exit 1; })
@@ -159,7 +159,7 @@ POLICIES_RESPONSE=$(curl -s \
 EXISTING_POLICIES=$(echo "$POLICIES_RESPONSE" | jq -r '.alertPolicies[]?.displayName' 2>/dev/null || echo "")
 
 # Get uptime check IDs for linking to alert policies
-UPTIME_CONFIGS=$(curl -s \
+UPTIME_CONFIGS=$(curl -s --fail-with-body \
     -H "$AUTH_HEADER" \
     "$MONITORING_API/uptimeCheckConfigs" \
     || { echo "ERROR: Failed to list uptime configs"; exit 1; })
@@ -184,7 +184,7 @@ for i in "${!CHECK_NAMES[@]}"; do
     fi
 
     echo "Creating alert policy '$ALERT_NAME'..."
-    POLICY_RESPONSE=$(curl -s \
+    POLICY_RESPONSE=$(curl -s --fail-with-body \
         -X POST \
         -H "$AUTH_HEADER" \
         -H "Content-Type: application/json" \
