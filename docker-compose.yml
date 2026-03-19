@@ -12,7 +12,13 @@ services:
     environment:
       - DOMAIN=${DOMAIN}
     depends_on:
-      - outline
+      outline:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   outline:
     image: docker.getoutline.com/outlinewiki/outline:1.4.0
@@ -20,6 +26,12 @@ services:
     env_file: .env
     volumes:
       - ./deploy/S3Storage.js:/opt/outline/build/server/storage/files/S3Storage.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/_health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
