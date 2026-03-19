@@ -59,6 +59,13 @@ GCS_SECRET_KEY=$(get_metadata "gcs-secret-key")
 GCS_BUCKET=$(get_metadata "gcs-bucket")
 SLACK_CLIENT_ID=$(get_metadata "slack-client-id")
 SLACK_CLIENT_SECRET=$(get_metadata "slack-client-secret")
+KUTT_DB_PASSWORD=$(get_metadata "kutt-db-password")
+KUTT_JWT_SECRET=$(get_metadata "kutt-jwt-secret")
+OAUTH2_CLIENT_ID=$(get_metadata "oauth2-client-id")
+OAUTH2_CLIENT_SECRET=$(get_metadata "oauth2-client-secret")
+OAUTH2_COOKIE_SECRET=$(get_metadata "oauth2-cookie-secret")
+OAUTH2_GOOGLE_GROUP=$(get_metadata "oauth2-google-group")
+OAUTH2_GOOGLE_ADMIN_EMAIL=$(get_metadata "oauth2-google-admin-email")
 
 # Validate required fields
 if [[ -z "$DOMAIN" || -z "$SECRET_KEY" || -z "$UTILS_SECRET" ]]; then
@@ -70,7 +77,7 @@ log "Domain: $DOMAIN"
 
 # Create docker-compose.yml
 log "Creating docker-compose.yml..."
-cat > docker-compose.yml <<'COMPOSE'
+cat > docker-compose.yml <<COMPOSE
 services:
   caddy:
     image: caddy:2-alpine
@@ -85,7 +92,17 @@ services:
     environment:
       - DOMAIN=${DOMAIN}
     depends_on:
-      - outline
+      outline:
+        condition: service_healthy
+      oauth2-proxy:
+        condition: service_healthy
+      kutt:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   outline:
     image: docker.getoutline.com/outlinewiki/outline:1.4.0
@@ -93,11 +110,58 @@ services:
     env_file: .env
     volumes:
       - ./S3Storage.js:/opt/outline/build/server/storage/files/S3Storage.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/_health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  kutt:
+    image: kutt/kutt:v3.2.3
+    restart: unless-stopped
+    env_file: kutt.env
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3001/api/v2/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    restart: unless-stopped
+    volumes:
+      - ./google-sa-key.json:/etc/oauth2-proxy/google-sa-key.json:ro
+    environment:
+      - OAUTH2_PROXY_PROVIDER=google
+      - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_CLIENT_ID}
+      - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_CLIENT_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_COOKIE_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECURE=true
+      - OAUTH2_PROXY_EMAIL_DOMAINS=makenashville.org
+      - OAUTH2_PROXY_GOOGLE_GROUP=${OAUTH2_GOOGLE_GROUP}
+      - OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL=${OAUTH2_GOOGLE_ADMIN_EMAIL}
+      - OAUTH2_PROXY_GOOGLE_SERVICE_ACCOUNT_JSON=/etc/oauth2-proxy/google-sa-key.json
+      - OAUTH2_PROXY_REDIRECT_URL=https://to.makenashville.org/oauth2/callback
+      - OAUTH2_PROXY_UPSTREAM=static://202
+      - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      - OAUTH2_PROXY_REVERSE_PROXY=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:4180/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   postgres:
     image: postgres:16-alpine
@@ -105,6 +169,7 @@ services:
     env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init-kutt-db.sql:/docker-entrypoint-initdb.d/init-kutt-db.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "outline"]
       interval: 5s
@@ -335,6 +400,13 @@ class S3Storage extends _BaseStorage.default {
 exports.default = S3Storage;
 S3EOF
 
+# Create Kutt database init script with production password
+log "Creating Kutt database init script..."
+cat > init-kutt-db.sql <<KUTTSQL
+CREATE USER kutt WITH PASSWORD '${KUTT_DB_PASSWORD}';
+CREATE DATABASE kutt OWNER kutt;
+KUTTSQL
+
 # Create Caddyfile
 log "Creating Caddyfile..."
 cat > Caddyfile <<CADDY
@@ -346,6 +418,35 @@ ${DOMAIN} {
 		-Server
 	}
 	reverse_proxy outline:3000
+}
+
+to.makenashville.org {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180
+	}
+
+	@protected {
+		path / /api /api/*
+	}
+	handle @protected {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			header_up X-Forwarded-Host {host}
+			copy_headers X-Auth-Request-User X-Auth-Request-Email
+		}
+		reverse_proxy kutt:3001
+	}
+
+	handle {
+		reverse_proxy kutt:3001
+	}
 }
 CADDY
 
@@ -392,6 +493,31 @@ ENV
 
 # Set proper permissions
 chmod 600 .env
+
+log "Creating kutt.env..."
+cat > kutt.env <<KUTTENV
+DEFAULT_DOMAIN=to.makenashville.org
+PORT=3001
+SITE_NAME=Make Nashville Links
+DB_CLIENT=pg
+DB_HOST=postgres
+DB_PORT=5432
+DB_NAME=kutt
+DB_USER=kutt
+DB_PASSWORD=${KUTT_DB_PASSWORD}
+REDIS_ENABLED=true
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=1
+JWT_SECRET=${KUTT_JWT_SECRET}
+DISALLOW_REGISTRATION=true
+DISALLOW_ANONYMOUS_LINKS=true
+DISALLOW_LOGIN_FORM=true
+MAIL_ENABLED=false
+ADMIN_EMAILS=admin@makenashville.org
+TRUST_PROXY=true
+KUTTENV
+chmod 600 kutt.env
 
 # Pull images
 log "Pulling Docker images..."
