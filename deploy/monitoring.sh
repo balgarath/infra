@@ -144,3 +144,96 @@ for i in "${!CHECK_NAMES[@]}"; do
 
     echo "Created uptime check: $CHECK_NAME"
 done
+
+# ============================================
+# Create alert policies (one per check)
+# ============================================
+echo ""
+echo "Setting up alert policies..."
+
+POLICIES_RESPONSE=$(curl -s \
+    -H "$AUTH_HEADER" \
+    "$MONITORING_API/alertPolicies" \
+    || { echo "ERROR: Failed to list alert policies"; exit 1; })
+
+EXISTING_POLICIES=$(echo "$POLICIES_RESPONSE" | jq -r '.alertPolicies[]?.displayName' 2>/dev/null || echo "")
+
+# Get uptime check IDs for linking to alert policies
+UPTIME_CONFIGS=$(curl -s \
+    -H "$AUTH_HEADER" \
+    "$MONITORING_API/uptimeCheckConfigs" \
+    || { echo "ERROR: Failed to list uptime configs"; exit 1; })
+
+for i in "${!CHECK_NAMES[@]}"; do
+    CHECK_NAME="${CHECK_NAMES[$i]}"
+    ALERT_NAME="uptime-alert-${CHECK_NAME#uptime-}"
+
+    if echo "$EXISTING_POLICIES" | grep -q "^${ALERT_NAME}$"; then
+        echo "Alert policy '$ALERT_NAME' already exists — skipping"
+        continue
+    fi
+
+    # Find the uptime check ID by display name
+    CHECK_ID=$(echo "$UPTIME_CONFIGS" \
+        | jq -r '.uptimeCheckConfigs[]? | select(.displayName == "'"$CHECK_NAME"'") | .name' \
+        | sed 's|.*/||')
+
+    if [[ -z "$CHECK_ID" ]]; then
+        echo "WARNING: Could not find uptime check ID for '$CHECK_NAME' — skipping alert policy"
+        continue
+    fi
+
+    echo "Creating alert policy '$ALERT_NAME'..."
+    POLICY_RESPONSE=$(curl -s \
+        -X POST \
+        -H "$AUTH_HEADER" \
+        -H "Content-Type: application/json" \
+        "$MONITORING_API/alertPolicies" \
+        -d '{
+            "displayName": "'"$ALERT_NAME"'",
+            "combiner": "OR",
+            "conditions": [{
+                "displayName": "'"$CHECK_NAME"' failure",
+                "conditionThreshold": {
+                    "filter": "resource.type = \"uptime_url\" AND metric.type = \"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.labels.check_id = \"'"$CHECK_ID"'\"",
+                    "comparison": "COMPARISON_GT",
+                    "thresholdValue": 1,
+                    "duration": "600s",
+                    "aggregations": [{
+                        "alignmentPeriod": "600s",
+                        "perSeriesAligner": "ALIGN_NEXT_OLDER",
+                        "crossSeriesReducer": "REDUCE_COUNT_FALSE",
+                        "groupByFields": ["resource.label.host"]
+                    }],
+                    "trigger": {
+                        "count": 1
+                    }
+                }
+            }],
+            "notificationChannels": ["'"$CHANNEL_NAME"'"],
+            "alertStrategy": {
+                "autoClose": "604800s"
+            }
+        }' || { echo "ERROR: Failed to create alert policy '$ALERT_NAME'"; exit 1; })
+
+    POLICY_NAME=$(echo "$POLICY_RESPONSE" | jq -r '.name')
+    if [[ -z "$POLICY_NAME" || "$POLICY_NAME" == "null" ]]; then
+        echo "ERROR: Failed to create alert policy '$ALERT_NAME'"
+        echo "$POLICY_RESPONSE" | jq .
+        exit 1
+    fi
+
+    echo "Created alert policy: $ALERT_NAME"
+done
+
+echo ""
+echo "============================================"
+echo "Uptime monitoring setup complete!"
+echo "============================================"
+echo ""
+echo "Checks created for:"
+for i in "${!CHECK_NAMES[@]}"; do
+    echo "  ${CHECK_NAMES[$i]} → ${CHECK_URLS[$i]}"
+done
+echo ""
+echo "View in console: https://console.cloud.google.com/monitoring/uptime?project=$PROJECT_ID"
