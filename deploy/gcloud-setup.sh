@@ -42,6 +42,8 @@ MACHINE_TYPE="${MACHINE_TYPE:-e2-medium}"
 SECRET_KEY="${SECRET_KEY:-$(openssl rand -hex 32)}"
 UTILS_SECRET="${UTILS_SECRET:-$(openssl rand -hex 32)}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -base64 24 | tr -d '/+=')}"
+KUTT_DB_PASSWORD="${KUTT_DB_PASSWORD:-$(openssl rand -base64 24 | tr -d '/+=')}"
+KUTT_JWT_SECRET="${KUTT_JWT_SECRET:-$(openssl rand -hex 32)}"
 
 # ============================================
 # Check if instance exists
@@ -74,7 +76,14 @@ gcs-secret-key="$GCS_SECRET_KEY",\
 gcs-bucket="$GCS_BUCKET",\
 slack-client-id="${SLACK_CLIENT_ID:-}",\
 slack-client-secret="${SLACK_CLIENT_SECRET:-}",\
-slack-webhook-url="${SLACK_WEBHOOK_URL:-}"
+slack-webhook-url="${SLACK_WEBHOOK_URL:-}",\
+kutt-db-password="$KUTT_DB_PASSWORD",\
+kutt-jwt-secret="$KUTT_JWT_SECRET",\
+oauth2-client-id="${OAUTH2_PROXY_CLIENT_ID:-}",\
+oauth2-client-secret="${OAUTH2_PROXY_CLIENT_SECRET:-}",\
+oauth2-cookie-secret="${OAUTH2_PROXY_COOKIE_SECRET:-}",\
+oauth2-google-group="${OAUTH2_PROXY_GOOGLE_GROUP:-}",\
+oauth2-google-admin-email="${OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL:-}"
 
     # Update GCS bucket CORS for direct browser uploads
     echo "Updating GCS bucket CORS..."
@@ -89,6 +98,18 @@ CORS
     echo "Uploading S3Storage.js patch..."
     gcloud compute scp "$SCRIPT_DIR/S3Storage.js" "$INSTANCE_NAME:~/S3Storage.js" --zone="$ZONE"
     gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo mv ~/S3Storage.js /opt/outline/S3Storage.js && sudo chmod 644 /opt/outline/S3Storage.js'
+
+    # Upload Kutt files
+    echo "Uploading Kutt files..."
+    gcloud compute scp "$SCRIPT_DIR/init-kutt-db.sql" "$INSTANCE_NAME:~/init-kutt-db.sql" --zone="$ZONE"
+    gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo mv ~/init-kutt-db.sql /opt/outline/init-kutt-db.sql && sudo chmod 644 /opt/outline/init-kutt-db.sql'
+
+    # Upload Google service account key for oauth2-proxy (required for Google Group access control)
+    if [[ -f "$SCRIPT_DIR/google-sa-key.json" ]]; then
+        echo "Uploading Google service account key..."
+        gcloud compute scp "$SCRIPT_DIR/google-sa-key.json" "$INSTANCE_NAME:~/google-sa-key.json" --zone="$ZONE"
+        gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo mv ~/google-sa-key.json /opt/outline/google-sa-key.json && sudo chmod 600 /opt/outline/google-sa-key.json'
+    fi
 
     # Re-run configuration on the server
     echo "Applying configuration on server..."
@@ -113,6 +134,20 @@ CORS
         SLACK_CLIENT_ID=$(get_metadata "slack-client-id")
         SLACK_CLIENT_SECRET=$(get_metadata "slack-client-secret")
         SLACK_WEBHOOK_URL=$(get_metadata "slack-webhook-url")
+        KUTT_DB_PASSWORD=$(get_metadata "kutt-db-password")
+        KUTT_JWT_SECRET=$(get_metadata "kutt-jwt-secret")
+        OAUTH2_CLIENT_ID=$(get_metadata "oauth2-client-id")
+        OAUTH2_CLIENT_SECRET=$(get_metadata "oauth2-client-secret")
+        OAUTH2_COOKIE_SECRET=$(get_metadata "oauth2-cookie-secret")
+        OAUTH2_GOOGLE_GROUP=$(get_metadata "oauth2-google-group")
+        OAUTH2_GOOGLE_ADMIN_EMAIL=$(get_metadata "oauth2-google-admin-email")
+
+        # Create Kutt database if it doesn't exist on existing Postgres instances
+        echo "Ensuring Kutt database exists..."
+        sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles WHERE rolname='"'"'kutt'"'"'" | grep -q 1 || \
+            sudo docker compose exec -T postgres psql -U outline -c "CREATE USER kutt WITH PASSWORD '"'"'${KUTT_DB_PASSWORD}'"'"';"
+        sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='"'"'kutt'"'"'" | grep -q 1 || \
+            sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE kutt OWNER kutt;"
 
         echo "Updating configuration for domain: $DOMAIN"
 
@@ -126,6 +161,35 @@ ${DOMAIN} {
 		-Server
 	}
 	reverse_proxy outline:3000
+}
+
+to.makenashville.org {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180
+	}
+
+	@protected {
+		path / /api /api/*
+	}
+	handle @protected {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			header_up X-Forwarded-Host {host}
+			copy_headers X-Auth-Request-User X-Auth-Request-Email
+		}
+		reverse_proxy kutt:3001
+	}
+
+	handle {
+		reverse_proxy kutt:3001
+	}
 }
 CADDY
 
@@ -172,7 +236,32 @@ ENV
 
         sudo chmod 600 .env
 
-        # Update docker-compose.yml to ensure S3Storage.js volume mount is present
+        # Write kutt.env with production values
+        sudo tee kutt.env > /dev/null <<KUTTENV
+DEFAULT_DOMAIN=to.makenashville.org
+PORT=3001
+SITE_NAME=Make Nashville Links
+DB_CLIENT=pg
+DB_HOST=postgres
+DB_PORT=5432
+DB_NAME=kutt
+DB_USER=kutt
+DB_PASSWORD=${KUTT_DB_PASSWORD}
+REDIS_ENABLED=true
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=1
+JWT_SECRET=${KUTT_JWT_SECRET}
+DISALLOW_REGISTRATION=true
+DISALLOW_ANONYMOUS_LINKS=true
+DISALLOW_LOGIN_FORM=true
+MAIL_ENABLED=false
+ADMIN_EMAILS=admin@makenashville.org
+TRUST_PROXY=true
+KUTTENV
+        sudo chmod 600 kutt.env
+
+        # Update docker-compose.yml
         sudo tee docker-compose.yml > /dev/null <<COMPOSE
 services:
   caddy:
@@ -188,7 +277,17 @@ services:
     environment:
       - DOMAIN=${DOMAIN}
     depends_on:
-      - outline
+      outline:
+        condition: service_healthy
+      oauth2-proxy:
+        condition: service_healthy
+      kutt:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   outline:
     image: docker.getoutline.com/outlinewiki/outline:1.4.0
@@ -196,11 +295,58 @@ services:
     env_file: .env
     volumes:
       - ./S3Storage.js:/opt/outline/build/server/storage/files/S3Storage.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/_health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  kutt:
+    image: kutt/kutt:v3.2.3
+    restart: unless-stopped
+    env_file: kutt.env
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3001/api/v2/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    restart: unless-stopped
+    volumes:
+      - ./google-sa-key.json:/etc/oauth2-proxy/google-sa-key.json:ro
+    environment:
+      - OAUTH2_PROXY_PROVIDER=google
+      - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_CLIENT_ID}
+      - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_CLIENT_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_COOKIE_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECURE=true
+      - OAUTH2_PROXY_EMAIL_DOMAINS=makenashville.org
+      - OAUTH2_PROXY_GOOGLE_GROUP=${OAUTH2_GOOGLE_GROUP}
+      - OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL=${OAUTH2_GOOGLE_ADMIN_EMAIL}
+      - OAUTH2_PROXY_GOOGLE_SERVICE_ACCOUNT_JSON=/etc/oauth2-proxy/google-sa-key.json
+      - OAUTH2_PROXY_REDIRECT_URL=https://to.makenashville.org/oauth2/callback
+      - OAUTH2_PROXY_UPSTREAM=static://202
+      - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      - OAUTH2_PROXY_REVERSE_PROXY=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:4180/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   postgres:
     image: postgres:16-alpine
@@ -208,6 +354,7 @@ services:
     env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init-kutt-db.sql:/docker-entrypoint-initdb.d/init-kutt-db.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "outline"]
       interval: 5s
@@ -251,6 +398,12 @@ trap notify_failure ERR
 docker compose -f /opt/outline/docker-compose.yml exec -T postgres pg_dump -U outline outline | gzip > "\${BACKUP_FILE}"
 gcloud storage cp "\${BACKUP_FILE}" "\${BUCKET}/outline-\${TIMESTAMP}.sql.gz"
 rm -f "\${BACKUP_FILE}"
+
+# Backup Kutt database
+KUTT_BACKUP_FILE="/tmp/kutt-\${TIMESTAMP}.sql.gz"
+docker compose -f /opt/outline/docker-compose.yml exec -T postgres pg_dump -U kutt kutt | gzip > "\${KUTT_BACKUP_FILE}"
+gcloud storage cp "\${KUTT_BACKUP_FILE}" "\${BUCKET}/kutt-\${TIMESTAMP}.sql.gz"
+rm -f "\${KUTT_BACKUP_FILE}"
 
 cutoff=\$(date -d "-\${RETAIN_DAYS} days" +%s)
 gcloud storage ls -l "\${BUCKET}/" 2>/dev/null | while read -r line; do
@@ -384,7 +537,14 @@ gcs-secret-key="$GCS_SECRET_KEY",\
 gcs-bucket="$GCS_BUCKET",\
 slack-client-id="${SLACK_CLIENT_ID:-}",\
 slack-client-secret="${SLACK_CLIENT_SECRET:-}",\
-slack-webhook-url="${SLACK_WEBHOOK_URL:-}"
+slack-webhook-url="${SLACK_WEBHOOK_URL:-}",\
+kutt-db-password="$KUTT_DB_PASSWORD",\
+kutt-jwt-secret="$KUTT_JWT_SECRET",\
+oauth2-client-id="${OAUTH2_PROXY_CLIENT_ID:-}",\
+oauth2-client-secret="${OAUTH2_PROXY_CLIENT_SECRET:-}",\
+oauth2-cookie-secret="${OAUTH2_PROXY_COOKIE_SECRET:-}",\
+oauth2-google-group="${OAUTH2_PROXY_GOOGLE_GROUP:-}",\
+oauth2-google-admin-email="${OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL:-}"
 
 echo ""
 echo "============================================"
