@@ -113,7 +113,8 @@ CORS
 
     # Re-run configuration on the server
     echo "Applying configuration on server..."
-    gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" -- bash -s <<'SSHEOF'
+    REMOTE_SCRIPT=$(mktemp)
+    cat > "$REMOTE_SCRIPT" <<'SSHEOF'
         cd /opt/outline
 
         # Fetch new metadata
@@ -430,6 +431,9 @@ BACKUPSCRIPT
 
         echo "Update complete!"
 SSHEOF
+    gcloud compute scp "$REMOTE_SCRIPT" "$INSTANCE_NAME:~/update-config.sh" --zone="$ZONE"
+    gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo bash ~/update-config.sh && rm ~/update-config.sh'
+    rm "$REMOTE_SCRIPT"
 
     STATIC_IP=$(gcloud compute addresses describe "$INSTANCE_NAME-ip" \
         --region="$REGION" \
