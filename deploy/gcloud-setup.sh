@@ -82,7 +82,7 @@ kutt-jwt-secret="$KUTT_JWT_SECRET",\
 oauth2-client-id="${OAUTH2_PROXY_CLIENT_ID:-}",\
 oauth2-client-secret="${OAUTH2_PROXY_CLIENT_SECRET:-}",\
 oauth2-cookie-secret="${OAUTH2_PROXY_COOKIE_SECRET:-}",\
-oauth2-google-group="${OAUTH2_PROXY_GOOGLE_GROUP:-}",\
+oauth2-google-group="${OAUTH2_PROXY_GOOGLE_GROUPS:-}",\
 oauth2-google-admin-email="${OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL:-}"
 
     # Update GCS bucket CORS for direct browser uploads
@@ -336,7 +336,7 @@ services:
       - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_COOKIE_SECRET}
       - OAUTH2_PROXY_COOKIE_SECURE=true
       - OAUTH2_PROXY_EMAIL_DOMAINS=makenashville.org
-      - OAUTH2_PROXY_GOOGLE_GROUP=${OAUTH2_GOOGLE_GROUP}
+      - OAUTH2_PROXY_GOOGLE_GROUPS=${OAUTH2_GOOGLE_GROUP}
       - OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL=${OAUTH2_GOOGLE_ADMIN_EMAIL}
       - OAUTH2_PROXY_GOOGLE_SERVICE_ACCOUNT_JSON=/etc/oauth2-proxy/google-sa-key.json
       - OAUTH2_PROXY_REDIRECT_URL=https://to.makenashville.org/oauth2/callback
@@ -547,7 +547,7 @@ kutt-jwt-secret="$KUTT_JWT_SECRET",\
 oauth2-client-id="${OAUTH2_PROXY_CLIENT_ID:-}",\
 oauth2-client-secret="${OAUTH2_PROXY_CLIENT_SECRET:-}",\
 oauth2-cookie-secret="${OAUTH2_PROXY_COOKIE_SECRET:-}",\
-oauth2-google-group="${OAUTH2_PROXY_GOOGLE_GROUP:-}",\
+oauth2-google-group="${OAUTH2_PROXY_GOOGLE_GROUPS:-}",\
 oauth2-google-admin-email="${OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL:-}"
 
 echo ""
