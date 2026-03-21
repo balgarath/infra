@@ -14,10 +14,12 @@ services:
     depends_on:
       outline:
         condition: service_healthy
+      shlink:
+        condition: service_healthy
+      shlink-web:
+        condition: service_healthy
       oauth2-proxy:
         condition: service_started
-      kutt:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
       interval: 5s
@@ -42,12 +44,21 @@ services:
       redis:
         condition: service_healthy
 
-  kutt:
-    image: kutt/kutt:v3.2.3
+  shlink:
+    image: shlinkio/shlink:4
     restart: unless-stopped
-    env_file: kutt.env
+    environment:
+      - DEFAULT_DOMAIN=go.makenashville.org
+      - IS_HTTPS_ENABLED=true
+      - DB_DRIVER=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=shlink
+      - DB_USER=shlink
+      - DB_PASSWORD=${SHLINK_DB_PASSWORD:-shlink}
+      - REDIS_SERVERS=redis://redis:6379/2
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3001/api/v2/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/rest/health > /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -58,9 +69,20 @@ services:
       redis:
         condition: service_healthy
 
+  shlink-web:
+    image: shlinkio/shlink-web-client:4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080 > /dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
     restart: unless-stopped
+    volumes:
+      - ./deploy/google-sa-key.json:/etc/oauth2-proxy/google-sa-key.json:ro
     environment:
       - OAUTH2_PROXY_PROVIDER=google
       - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_PROXY_CLIENT_ID:-placeholder}
@@ -68,7 +90,10 @@ services:
       - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
       - OAUTH2_PROXY_COOKIE_SECURE=true
       - OAUTH2_PROXY_EMAIL_DOMAINS=makenashville.org
-      - OAUTH2_PROXY_REDIRECT_URL=https://to.makenashville.org/oauth2/callback
+      - OAUTH2_PROXY_GOOGLE_GROUPS=${OAUTH2_PROXY_GOOGLE_GROUPS:-}
+      - OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL=${OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL:-}
+      - OAUTH2_PROXY_GOOGLE_SERVICE_ACCOUNT_JSON=/etc/oauth2-proxy/google-sa-key.json
+      - OAUTH2_PROXY_REDIRECT_URL=https://links.makenashville.org/oauth2/callback
       - OAUTH2_PROXY_UPSTREAM=static://202
       - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
       - OAUTH2_PROXY_REVERSE_PROXY=true
@@ -79,7 +104,7 @@ services:
     env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./deploy/init-kutt-db.sql:/docker-entrypoint-initdb.d/init-kutt-db.sql:ro
+      - ./deploy/init-shlink-db.sql:/docker-entrypoint-initdb.d/init-shlink-db.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "outline"]
       interval: 5s

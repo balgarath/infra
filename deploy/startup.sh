@@ -59,12 +59,10 @@ GCS_SECRET_KEY=$(get_metadata "gcs-secret-key")
 GCS_BUCKET=$(get_metadata "gcs-bucket")
 SLACK_CLIENT_ID=$(get_metadata "slack-client-id")
 SLACK_CLIENT_SECRET=$(get_metadata "slack-client-secret")
-KUTT_DB_PASSWORD=$(get_metadata "kutt-db-password")
-KUTT_JWT_SECRET=$(get_metadata "kutt-jwt-secret")
+SHLINK_DB_PASSWORD=$(get_metadata "shlink-db-password")
 OAUTH2_CLIENT_ID=$(get_metadata "oauth2-client-id")
 OAUTH2_CLIENT_SECRET=$(get_metadata "oauth2-client-secret")
 OAUTH2_COOKIE_SECRET=$(get_metadata "oauth2-cookie-secret")
-OAUTH2_GOOGLE_GROUP=$(get_metadata "oauth2-google-group")
 OAUTH2_GOOGLE_ADMIN_EMAIL=$(get_metadata "oauth2-google-admin-email")
 
 # Validate required fields
@@ -94,10 +92,12 @@ services:
     depends_on:
       outline:
         condition: service_healthy
+      shlink:
+        condition: service_healthy
+      shlink-web:
+        condition: service_healthy
       oauth2-proxy:
         condition: service_started
-      kutt:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
       interval: 5s
@@ -122,12 +122,21 @@ services:
       redis:
         condition: service_healthy
 
-  kutt:
-    image: kutt/kutt:v3.2.3
+  shlink:
+    image: shlinkio/shlink:4
     restart: unless-stopped
-    env_file: kutt.env
+    environment:
+      - DEFAULT_DOMAIN=go.makenashville.org
+      - IS_HTTPS_ENABLED=true
+      - DB_DRIVER=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=shlink
+      - DB_USER=shlink
+      - DB_PASSWORD=${SHLINK_DB_PASSWORD}
+      - REDIS_SERVERS=redis://redis:6379/2
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3001/api/v2/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/rest/health > /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -137,6 +146,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  shlink-web:
+    image: shlinkio/shlink-web-client:4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080 > /dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
@@ -153,7 +171,7 @@ services:
       - OAUTH2_PROXY_GOOGLE_GROUPS=${OAUTH2_GOOGLE_GROUP}
       - OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL=${OAUTH2_GOOGLE_ADMIN_EMAIL}
       - OAUTH2_PROXY_GOOGLE_SERVICE_ACCOUNT_JSON=/etc/oauth2-proxy/google-sa-key.json
-      - OAUTH2_PROXY_REDIRECT_URL=https://to.makenashville.org/oauth2/callback
+      - OAUTH2_PROXY_REDIRECT_URL=https://links.makenashville.org/oauth2/callback
       - OAUTH2_PROXY_UPSTREAM=static://202
       - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
       - OAUTH2_PROXY_REVERSE_PROXY=true
@@ -164,7 +182,7 @@ services:
     env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-kutt-db.sql:/docker-entrypoint-initdb.d/init-kutt-db.sql:ro
+      - ./init-shlink-db.sql:/docker-entrypoint-initdb.d/init-shlink-db.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "outline"]
       interval: 5s
@@ -395,12 +413,12 @@ class S3Storage extends _BaseStorage.default {
 exports.default = S3Storage;
 S3EOF
 
-# Create Kutt database init script with production password
-log "Creating Kutt database init script..."
-cat > init-kutt-db.sql <<KUTTSQL
-CREATE USER kutt WITH PASSWORD '${KUTT_DB_PASSWORD}';
-CREATE DATABASE kutt OWNER kutt;
-KUTTSQL
+# Create Shlink database init script with production password
+log "Creating Shlink database init script..."
+cat > init-shlink-db.sql <<SHLINKSQL
+CREATE USER shlink WITH PASSWORD '${SHLINK_DB_PASSWORD}';
+CREATE DATABASE shlink OWNER shlink;
+SHLINKSQL
 
 # Create Caddyfile
 log "Creating Caddyfile..."
@@ -415,7 +433,7 @@ ${DOMAIN} {
 	reverse_proxy outline:3000
 }
 
-to.makenashville.org {
+links.makenashville.org {
 	header {
 		X-Frame-Options SAMEORIGIN
 		X-Content-Type-Options nosniff
@@ -427,10 +445,7 @@ to.makenashville.org {
 		reverse_proxy oauth2-proxy:4180
 	}
 
-	@protected {
-		path / /api /api/*
-	}
-	handle @protected {
+	handle {
 		forward_auth oauth2-proxy:4180 {
 			uri /oauth2/auth
 			header_up X-Forwarded-Host {host}
@@ -439,15 +454,21 @@ to.makenashville.org {
 				status 401
 			}
 			handle_response @unauthorized {
-				redir * https://to.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
+				redir * https://links.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
 			}
 		}
-		reverse_proxy kutt:3001
+		reverse_proxy shlink-web:8080
 	}
+}
 
-	handle {
-		reverse_proxy kutt:3001
+to.makenashville.org, go.makenashville.org {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
 	}
+	reverse_proxy shlink:8080
 }
 CADDY
 
@@ -490,40 +511,13 @@ AWS_S3_FORCE_PATH_STYLE=true
 # Authentication (Slack)
 SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
 SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
+
+# Shlink
+SHLINK_DB_PASSWORD=${SHLINK_DB_PASSWORD}
 ENV
 
 # Set proper permissions
 chmod 600 .env
-
-log "Creating kutt.env..."
-cat > kutt.env <<KUTTENV
-DEFAULT_DOMAIN=to.makenashville.org
-PORT=3001
-SITE_NAME=Make Nashville Links
-DB_CLIENT=pg
-DB_HOST=postgres
-DB_PORT=5432
-DB_NAME=kutt
-DB_USER=kutt
-DB_PASSWORD=${KUTT_DB_PASSWORD}
-REDIS_ENABLED=true
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_DB=1
-JWT_SECRET=${KUTT_JWT_SECRET}
-DISALLOW_REGISTRATION=true
-DISALLOW_ANONYMOUS_LINKS=true
-DISALLOW_LOGIN_FORM=true
-MAIL_ENABLED=false
-ADMIN_EMAILS=admin@makenashville.org
-TRUST_PROXY=true
-KUTTENV
-chmod 600 kutt.env
-
-# Create empty placeholder for google-sa-key.json if it doesn't exist
-# (actual key is deployed via gcloud-setup.sh after first boot)
-touch -a google-sa-key.json
-chmod 600 google-sa-key.json
 
 # Pull images
 log "Pulling Docker images..."
@@ -540,5 +534,10 @@ sleep 30
 # Check status
 docker compose ps
 
+# Generate Shlink API key
+log "Generating Shlink API key..."
+docker compose exec -T shlink shlink api-key:generate
+
 log "Setup complete! Outline should be available at https://${DOMAIN}"
+log "Shlink web client at https://links.makenashville.org"
 log "Note: DNS must point to this server's external IP for HTTPS to work"

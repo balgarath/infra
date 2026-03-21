@@ -1,0 +1,2 @@
+CREATE USER shlink WITH PASSWORD 'shlink';
+CREATE DATABASE shlink OWNER shlink;
