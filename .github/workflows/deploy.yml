@@ -3,56 +3,87 @@ name: Deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: production
+    env:
+      INSTANCE_NAME: make-nashville-wiki
+      ZONE: us-central1-a
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Write .env.production
+      - name: Write google-sa-key.json
+        run: echo '${{ secrets.GOOGLE_SA_KEY_JSON }}' > /tmp/google-sa-key.json
+
+      - name: Update instance metadata
         run: |
-          cat > .env.production <<EOF
-          PROJECT_ID=${{ secrets.PROJECT_ID }}
-          REGION=${{ vars.REGION || 'us-central1' }}
-          ZONE=${{ vars.ZONE || 'us-central1-a' }}
-          INSTANCE_NAME=${{ vars.INSTANCE_NAME || 'make-nashville-wiki' }}
-          MACHINE_TYPE=${{ vars.MACHINE_TYPE || 'e2-medium' }}
-          DOMAIN=${{ secrets.DOMAIN }}
-          GCS_BUCKET=${{ secrets.GCS_BUCKET }}
-          GCS_ACCESS_KEY=${{ secrets.GCS_ACCESS_KEY }}
-          GCS_SECRET_KEY=${{ secrets.GCS_SECRET_KEY }}
-          SLACK_CLIENT_ID=${{ secrets.SLACK_CLIENT_ID }}
-          SLACK_CLIENT_SECRET=${{ secrets.SLACK_CLIENT_SECRET }}
-          SECRET_KEY=${{ secrets.SECRET_KEY }}
-          UTILS_SECRET=${{ secrets.UTILS_SECRET }}
-          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-          SLACK_WEBHOOK_URL=${{ secrets.SLACK_WEBHOOK_URL }}
-          EOF
+          gcloud compute instances add-metadata "$INSTANCE_NAME" \
+            --zone="$ZONE" \
+            --metadata=\
+          domain="${{ secrets.DOMAIN }}",\
+          secret-key="${{ secrets.SECRET_KEY }}",\
+          utils-secret="${{ secrets.UTILS_SECRET }}",\
+          postgres-password="${{ secrets.POSTGRES_PASSWORD }}",\
+          gcs-access-key="${{ secrets.GCS_ACCESS_KEY }}",\
+          gcs-secret-key="${{ secrets.GCS_SECRET_KEY }}",\
+          gcs-bucket="${{ secrets.GCS_BUCKET }}",\
+          slack-client-id="${{ secrets.SLACK_CLIENT_ID }}",\
+          slack-client-secret="${{ secrets.SLACK_CLIENT_SECRET }}",\
+          slack-webhook-url="${{ secrets.SLACK_WEBHOOK_URL }}",\
+          shlink-db-password="${{ secrets.SHLINK_DB_PASSWORD }}",\
+          oauth2-client-id="${{ secrets.OAUTH2_PROXY_CLIENT_ID }}",\
+          oauth2-client-secret="${{ secrets.OAUTH2_PROXY_CLIENT_SECRET }}",\
+          oauth2-cookie-secret="${{ secrets.OAUTH2_PROXY_COOKIE_SECRET }}",\
+          oauth2-google-group="${{ secrets.OAUTH2_PROXY_GOOGLE_GROUPS }}",\
+          oauth2-google-admin-email="${{ secrets.OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL }}"
+
+      - name: Upload files to server
+        run: |
+          gcloud compute scp deploy/S3Storage.js "$INSTANCE_NAME:~/S3Storage.js" --zone="$ZONE"
+          gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo mv ~/S3Storage.js /opt/outline/S3Storage.js && sudo chmod 644 /opt/outline/S3Storage.js'
+
+          gcloud compute scp deploy/init-shlink-db.sql "$INSTANCE_NAME:~/init-shlink-db.sql" --zone="$ZONE"
+          gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo mv ~/init-shlink-db.sql /opt/outline/init-shlink-db.sql && sudo chmod 644 /opt/outline/init-shlink-db.sql'
+
+          gcloud compute scp /tmp/google-sa-key.json "$INSTANCE_NAME:~/google-sa-key.json" --zone="$ZONE"
+          gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo mv ~/google-sa-key.json /opt/outline/google-sa-key.json && sudo chmod 644 /opt/outline/google-sa-key.json'
 
       - name: Deploy
-        run: ./deploy/gcloud-setup.sh
-
-      - name: Notify Slack
-        if: always()
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          DOMAIN: ${{ secrets.DOMAIN }}
-          STATUS: ${{ job.status }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          [ -z "$SLACK_WEBHOOK_URL" ] && exit 0
-          if [ "$STATUS" = "success" ]; then
-            TEXT=":white_check_mark: *Make Nashville Wiki* deployed successfully — <https://${DOMAIN}|visit wiki> | <${RUN_URL}|view run>"
-          else
-            TEXT=":x: *Make Nashville Wiki* deploy failed — <${RUN_URL}|view run>"
-          fi
-          curl -s -X POST "$SLACK_WEBHOOK_URL" \
-            -H "Content-type: application/json" \
-            --data "{\"username\":\"GitHub Actions\",\"icon_emoji\":\":rocket:\",\"text\":\"${TEXT}\"}"
+          gcloud compute scp deploy/update-server.sh "$INSTANCE_NAME:~/update-server.sh" --zone="$ZONE"
+          gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" --command='sudo bash ~/update-server.sh && rm ~/update-server.sh'
+
+      - name: Update GCS bucket CORS
+        run: |
+          CORS_FILE=$(mktemp)
+          echo '[{"origin":["https://${{ secrets.DOMAIN }}"],"method":["GET","PUT","POST","DELETE","HEAD"],"responseHeader":["Content-Type","Authorization","Content-MD5","x-goog-resumable"],"maxAgeSeconds":3600}]' > "$CORS_FILE"
+          gcloud storage buckets update "gs://${{ secrets.GCS_BUCKET }}" --cors-file="$CORS_FILE"
+          rm "$CORS_FILE"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/google-sa-key.json
