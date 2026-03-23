@@ -1,12 +1,12 @@
-# Outline Docker Compose for Make Nashville
+# Make Nashville Infrastructure
 
-Docker Compose setup for [Outline](https://www.getoutline.com/) wiki, supporting local development and GCP deployment.
+Docker Compose setup for [Outline](https://www.getoutline.com/) wiki and supporting services, with local development and GCP deployment.
 
 ## Overview
 
 | Service | Local | Production |
 |---------|-------|------------|
-| **Outline** | `outline:1.4.0` | `outline:1.4.0` |
+| **Outline** | `outline:1.6.1` | `outline:1.6.1` |
 | **Caddy** | `caddy:2-alpine` (local TLS) | `caddy:2-alpine` (Let's Encrypt) |
 | **PostgreSQL** | `postgres:16-alpine` | `postgres:16-alpine` |
 | **Redis** | `redis:7-alpine` | `redis:7-alpine` |
@@ -61,45 +61,26 @@ Docker Compose setup for [Outline](https://www.getoutline.com/) wiki, supporting
 
 ## GCP Deployment
 
-Production deploys happen automatically via GitHub Actions on every push to `main`. The workflow authenticates with GCP, reconstructs `.env.production` from GitHub secrets, and runs `deploy/gcloud-setup.sh`.
+Production deploys happen automatically via GitHub Actions on every push to `main`. The workflow authenticates with GCP via Workload Identity Federation, updates instance metadata with secrets, uploads deploy files, and runs `deploy/update-server.sh` on the VM.
 
 ### First-time infrastructure setup
 
 This only needs to be done once when setting up a new environment.
 
-1. Create the GCP service account for GitHub Actions:
+1. Set up Workload Identity Federation for GitHub Actions:
    ```bash
-   gcloud iam service-accounts create github-deploy \
-     --display-name="GitHub Actions deploy" \
-     --project=YOUR_PROJECT_ID
-
-   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-     --member="serviceAccount:github-deploy@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-     --role="roles/compute.instanceAdmin.v1"
-
-   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-     --member="serviceAccount:github-deploy@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-     --role="roles/storage.admin"
-
-   gcloud iam service-accounts add-iam-policy-binding \
-     YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com \
-     --member="serviceAccount:github-deploy@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-     --role="roles/iam.serviceAccountUser"
-
-   gcloud iam service-accounts keys create github-deploy-key.json \
-     --iam-account=github-deploy@YOUR_PROJECT_ID.iam.gserviceaccount.com
-
-   # Base64-encode the key for GitHub secrets
-   cat github-deploy-key.json | base64 | tr -d '\n'
-   rm github-deploy-key.json
+   ./deploy/setup-wif.sh
    ```
+   This creates the service account, WIF pool, and OIDC provider, then prints the secret values to add to GitHub.
 
 2. Add the following secrets to GitHub (Settings → Secrets and variables → Actions):
 
    | Secret | Value |
    |--------|-------|
-   | `GCP_SA_KEY` | Base64-encoded service account key JSON |
-   | `PROJECT_ID` | GCP project ID |
+   | `GCP_WORKLOAD_IDENTITY_PROVIDER` | WIF provider resource name (output by `setup-wif.sh`) |
+   | `GCP_SERVICE_ACCOUNT` | Deploy service account email (output by `setup-wif.sh`) |
+   | `GCP_PROJECT_ID` | GCP project ID (output by `setup-wif.sh`) |
+   | `GOOGLE_SA_KEY_JSON` | Service account key JSON for GCS access from the VM |
    | `DOMAIN` | Your wiki domain |
    | `GCS_BUCKET` | GCS bucket name |
    | `GCS_ACCESS_KEY` | GCS HMAC access key |
@@ -110,6 +91,12 @@ This only needs to be done once when setting up a new environment.
    | `UTILS_SECRET` | Outline utils secret (32-byte hex) |
    | `POSTGRES_PASSWORD` | Database password |
    | `SLACK_WEBHOOK_URL` | Slack incoming webhook URL (optional — enables deploy and backup notifications) |
+   | `SHLINK_DB_PASSWORD` | Shlink database password |
+   | `OAUTH2_PROXY_CLIENT_ID` | OAuth2 Proxy Google client ID |
+   | `OAUTH2_PROXY_CLIENT_SECRET` | OAuth2 Proxy Google client secret |
+   | `OAUTH2_PROXY_COOKIE_SECRET` | OAuth2 Proxy cookie secret |
+   | `OAUTH2_PROXY_GOOGLE_GROUPS` | Allowed Google group for access |
+   | `OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL` | Google Workspace admin email for group lookup |
 
    Optionally add these as Actions Variables (non-secret) to override defaults:
 
@@ -141,10 +128,10 @@ To upgrade:
 
 1. Check the [Outline changelog](https://github.com/outline/outline/releases) for breaking changes.
 
-2. Update the image tag in all four locations:
+2. Update the image tag in all three locations:
    - `docker-compose.yml`
    - `deploy/startup.sh` (in the docker-compose.yml heredoc)
-   - `deploy/gcloud-setup.sh` (in the docker-compose.yml heredoc, update path)
+   - `deploy/update-server.sh` (in the docker-compose.yml heredoc)
 
 3. Extract and patch the new `S3Storage.js` from the new image:
    ```bash
@@ -197,7 +184,7 @@ Make Nashville wiki infrastructure is maintained by Make Nashville volunteers.
 
 ### What requires extra care
 
-- Changes to `deploy/gcloud-setup.sh` or `deploy/startup.sh` affect production infrastructure. Test with a separate GCP instance if possible.
+- Changes to `deploy/gcloud-setup.sh`, `deploy/update-server.sh`, or `deploy/startup.sh` affect production infrastructure. Test with a separate GCP instance if possible.
 - Changes to `deploy/S3Storage.js` must be validated against live file uploads — the GCS presigned POST flow is sensitive to field ordering and conditions.
 - Never commit `.env`, `.env.production`, or any file containing secrets.
 
