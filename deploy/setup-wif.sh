@@ -5,7 +5,7 @@ set -euo pipefail
 # Run this once to allow GitHub Actions to authenticate to GCP
 
 PROJECT_ID="${PROJECT_ID:-web-services-485500}"
-REPO="MakeNashville/make-nashville-compose"
+REPO="MakeNashville/infra"
 POOL_NAME="github-actions-pool"
 PROVIDER_NAME="github-oidc"
 SA_EMAIL="github-deploy@${PROJECT_ID}.iam.gserviceaccount.com"
