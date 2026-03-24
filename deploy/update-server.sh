@@ -29,6 +29,12 @@ OAUTH2_GOOGLE_GROUP=$(get_metadata "oauth2-google-group")
 OAUTH2_GOOGLE_ADMIN_EMAIL=$(get_metadata "oauth2-google-admin-email")
 N8N_DB_PASSWORD=$(get_metadata "n8n-db-password")
 N8N_ENCRYPTION_KEY=$(get_metadata "n8n-encryption-key")
+MOODLE_DB_PASSWORD=$(get_metadata "moodle-db-password")
+MOODLE_ADMIN_PASSWORD=$(get_metadata "moodle-admin-password")
+MOODLE_ADMIN_EMAIL=$(get_metadata "moodle-admin-email")
+MOODLE_WEBHOOK_SECRET=$(get_metadata "moodle-webhook-secret")
+GRIT_API_URL=$(get_metadata "grit-api-url")
+GRIT_API_KEY=$(get_metadata "grit-api-key")
 
 # Create Shlink database if it doesn't exist on existing Postgres instances
 echo "Ensuring Shlink database exists..."
@@ -46,6 +52,14 @@ sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles
 sudo docker compose exec -T postgres psql -U outline -c "ALTER USER n8n WITH PASSWORD '${N8N_DB_PASSWORD}';"
 sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='n8n'" | grep -q 1 || \
     sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE n8n OWNER n8n;"
+
+# Create Moodle database if it doesn't exist on existing Postgres instances
+echo "Ensuring Moodle database exists..."
+sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles WHERE rolname='moodle'" | grep -q 1 || \
+    sudo docker compose exec -T postgres psql -U outline -c "CREATE USER moodle WITH PASSWORD '${MOODLE_DB_PASSWORD}';"
+sudo docker compose exec -T postgres psql -U outline -c "ALTER USER moodle WITH PASSWORD '${MOODLE_DB_PASSWORD}';"
+sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='moodle'" | grep -q 1 || \
+    sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE moodle OWNER moodle;"
 
 echo "Updating configuration for domain: $DOMAIN"
 
@@ -133,6 +147,16 @@ auto.makenashville.org {
 		reverse_proxy n8n:5678
 	}
 }
+
+learn.makenashville.org {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	reverse_proxy moodle:8080
+}
 CADDY
 
 # Update .env file
@@ -181,6 +205,16 @@ SHLINK_DB_PASSWORD=${SHLINK_DB_PASSWORD}
 # n8n
 N8N_DB_PASSWORD=${N8N_DB_PASSWORD}
 N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+# Moodle
+MOODLE_DB_PASSWORD=${MOODLE_DB_PASSWORD}
+MOODLE_ADMIN_PASSWORD=${MOODLE_ADMIN_PASSWORD}
+MOODLE_ADMIN_EMAIL=${MOODLE_ADMIN_EMAIL}
+MOODLE_WEBHOOK_SECRET=${MOODLE_WEBHOOK_SECRET}
+
+# GRIT
+GRIT_API_URL=${GRIT_API_URL}
+GRIT_API_KEY=${GRIT_API_KEY}
 ENV
 
 sudo chmod 600 .env
@@ -213,6 +247,8 @@ services:
       oauth2-proxy:
         condition: service_started
       n8n:
+        condition: service_healthy
+      moodle:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
@@ -328,6 +364,59 @@ services:
       retries: 5
       start_period: 30s
 
+  moodle:
+    image: bitnami/moodle:4.5
+    restart: unless-stopped
+    environment:
+      - MOODLE_DATABASE_TYPE=pgsql
+      - MOODLE_DATABASE_HOST=postgres
+      - MOODLE_DATABASE_PORT_NUMBER=5432
+      - MOODLE_DATABASE_NAME=moodle
+      - MOODLE_DATABASE_USER=moodle
+      - MOODLE_DATABASE_PASSWORD=${MOODLE_DB_PASSWORD}
+      - MOODLE_USERNAME=admin
+      - MOODLE_PASSWORD=${MOODLE_ADMIN_PASSWORD}
+      - MOODLE_EMAIL=${MOODLE_ADMIN_EMAIL}
+      - MOODLE_HOST=learn.makenashville.org
+      - MOODLE_SITE_NAME=Make Nashville Learning
+      - MOODLE_PORT_NUMBER=8080
+      - MOODLE_REVERSEPROXY=true
+      - MOODLE_SSLPROXY=true
+      - MOODLE_LANG=en
+      - PHP_MEMORY_LIMIT=512M
+    volumes:
+      - moodle_data:/bitnami/moodledata
+      - moodle_local:/bitnami/moodle/local
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/login/index.php || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  grit-provisioner:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    volumes:
+      - ./grit-provisioner:/app:ro
+    command: ["python", "/app/server.py"]
+    environment:
+      - GRIT_API_URL=${GRIT_API_URL}
+      - GRIT_API_KEY=${GRIT_API_KEY}
+      - WEBHOOK_SECRET=${MOODLE_WEBHOOK_SECRET}
+      - COURSE_TOOL_MAP_PATH=/app/course-tool-map.json
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -356,6 +445,8 @@ volumes:
   caddy_data:
   caddy_config:
   n8n_data:
+  moodle_data:
+  moodle_local:
 COMPOSE
 
 # Write backup script
@@ -393,6 +484,18 @@ docker compose -f /opt/outline/docker-compose.yml exec -T postgres pg_dump -U n8
 gcloud storage cp "\${N8N_BACKUP_FILE}" "\${BUCKET}/n8n-\${TIMESTAMP}.sql.gz"
 rm -f "\${N8N_BACKUP_FILE}"
 
+# Backup Moodle database
+MOODLE_BACKUP_FILE="/tmp/moodle-\${TIMESTAMP}.sql.gz"
+docker compose -f /opt/outline/docker-compose.yml exec -T postgres pg_dump -U moodle moodle | gzip > "\${MOODLE_BACKUP_FILE}"
+gcloud storage cp "\${MOODLE_BACKUP_FILE}" "\${BUCKET}/moodle-\${TIMESTAMP}.sql.gz"
+rm -f "\${MOODLE_BACKUP_FILE}"
+
+# Backup Moodle data volume
+MOODLEDATA_BACKUP_FILE="/tmp/moodledata-\${TIMESTAMP}.tar.gz"
+docker run --rm -v outline_moodle_data:/data:ro -v /tmp:/backup alpine tar czf "/backup/moodledata-\${TIMESTAMP}.tar.gz" -C /data .
+gcloud storage cp "\${MOODLEDATA_BACKUP_FILE}" "\${BUCKET}/moodledata-\${TIMESTAMP}.tar.gz"
+rm -f "\${MOODLEDATA_BACKUP_FILE}"
+
 cutoff=\$(date -d "-\${RETAIN_DAYS} days" +%s)
 gcloud storage ls -l "\${BUCKET}/" 2>/dev/null | while read -r line; do
   file=\$(echo "\$line" | awk "{print \\\$NF}")
@@ -404,7 +507,7 @@ gcloud storage ls -l "\${BUCKET}/" 2>/dev/null | while read -r line; do
   fi
 done
 
-echo "[\$(date)] Backup complete: outline, shlink, and n8n \${TIMESTAMP}"
+echo "[\$(date)] Backup complete: outline, shlink, n8n, and moodle \${TIMESTAMP}"
 BACKUPSCRIPT
 sudo chmod +x /opt/outline/backup.sh
 

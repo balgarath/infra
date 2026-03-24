@@ -80,3 +80,13 @@ auto.makenashville.org {
 		reverse_proxy n8n:5678
 	}
 }
+
+learn.makenashville.org {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	reverse_proxy moodle:8080
+}
