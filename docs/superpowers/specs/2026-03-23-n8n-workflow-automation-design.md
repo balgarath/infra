@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add n8n as a self-hosted workflow automation platform to the existing Docker Compose stack. The UI is protected behind the shared OAuth2 Proxy (Google Workspace auth), routed via Caddy at `auto.makenashville.org`. Webhook endpoints are public so external services can trigger workflows. n8n uses a dedicated database on the shared Postgres instance and has a container memory limit to protect other services on the VM.
+Add n8n as a self-hosted workflow automation platform to the existing Docker Compose stack. The UI is protected behind the shared OAuth2 Proxy (Google Workspace auth), routed via Caddy at `automations.makenashville.org`. Webhook endpoints are public so external services can trigger workflows. n8n uses a dedicated database on the shared Postgres instance and has a container memory limit to protect other services on the VM.
 
 ## Goals
 
@@ -21,7 +21,7 @@ Internet → Caddy (TLS, ports 80/443)
               ├── wiki.makenashville.org   → Outline:3000
               ├── links.makenashville.org  → forward_auth(oauth2-proxy) → shlink-web:8080
               ├── to/go.makenashville.org  → Shlink:8080
-              └── auto.makenashville.org
+              └── automations.makenashville.org
                     ├── /oauth2/*          → oauth2-proxy:4180
                     ├── /webhook/*         → n8n:5678 (public, no auth)
                     ├── /webhook-test/*    → n8n:5678 (public, no auth)
@@ -42,11 +42,11 @@ Internet → Caddy (TLS, ports 80/443)
 
 ### Webhook Endpoints (No Auth)
 
-Requests to `auto.makenashville.org/webhook/*` and `/webhook-test/*` are proxied directly to n8n with no OAuth check. External services (Slack, GitHub, etc.) hit these endpoints to trigger workflows. n8n handles its own webhook authentication via per-workflow tokens, headers, or basic auth configured within each workflow.
+Requests to `automations.makenashville.org/webhook/*` and `/webhook-test/*` are proxied directly to n8n with no OAuth check. External services (Slack, GitHub, etc.) hit these endpoints to trigger workflows. n8n handles its own webhook authentication via per-workflow tokens, headers, or basic auth configured within each workflow.
 
 ### UI Access (Google Workspace Auth)
 
-1. User visits `auto.makenashville.org/` (n8n editor UI)
+1. User visits `automations.makenashville.org/` (n8n editor UI)
 2. Caddy's `forward_auth` sends subrequest to oauth2-proxy
 3. oauth2-proxy sees no valid session cookie → redirects to Google OIDC login
 4. User authenticates with Make Nashville Google Workspace account
@@ -64,7 +64,7 @@ The existing OAuth2 Proxy has `OAUTH2_PROXY_REDIRECT_URL` hardcoded to `https://
 | `OAUTH2_PROXY_COOKIE_DOMAINS` | (not set) | `.makenashville.org` |
 | `OAUTH2_PROXY_WHITELIST_DOMAINS` | (not set) | `.makenashville.org` |
 
-Additionally, the Google OAuth app in Cloud Console must add `https://auto.makenashville.org/oauth2/callback` as an authorized redirect URI (alongside the existing `links.` one).
+Additionally, the Google OAuth app in Cloud Console must add `https://automations.makenashville.org/oauth2/callback` as an authorized redirect URI (alongside the existing `links.` one).
 
 ### n8n Built-in Auth
 
@@ -72,10 +72,10 @@ n8n has its own user management with an owner account created on first launch. S
 
 ## Caddy Configuration
 
-New site block for `auto.makenashville.org`:
+New site block for `automations.makenashville.org`:
 
 ```caddyfile
-auto.makenashville.org {
+automations.makenashville.org {
     header {
         X-Frame-Options SAMEORIGIN
         X-Content-Type-Options nosniff
@@ -106,7 +106,7 @@ auto.makenashville.org {
                 status 401
             }
             handle_response @unauthorized {
-                redir * https://auto.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
+                redir * https://automations.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
             }
         }
         reverse_proxy n8n:5678
@@ -133,10 +133,10 @@ n8n:
     - DB_POSTGRESDB_DATABASE=n8n
     - DB_POSTGRESDB_USER=n8n
     - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD}
-    - N8N_HOST=auto.makenashville.org
+    - N8N_HOST=automations.makenashville.org
     - N8N_PROTOCOL=https
     - N8N_PORT=5678
-    - WEBHOOK_URL=https://auto.makenashville.org
+    - WEBHOOK_URL=https://automations.makenashville.org
     - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
     - N8N_USER_MANAGEMENT_DISABLED=true
     - N8N_DIAGNOSTICS_ENABLED=false
@@ -218,10 +218,10 @@ Key environment variables:
 | `DB_POSTGRESDB_DATABASE` | `n8n` |
 | `DB_POSTGRESDB_USER` | `n8n` |
 | `DB_POSTGRESDB_PASSWORD` | (from GitHub Secret) |
-| `N8N_HOST` | `auto.makenashville.org` |
+| `N8N_HOST` | `automations.makenashville.org` |
 | `N8N_PROTOCOL` | `https` |
 | `N8N_PORT` | `5678` |
-| `WEBHOOK_URL` | `https://auto.makenashville.org` |
+| `WEBHOOK_URL` | `https://automations.makenashville.org` |
 | `N8N_ENCRYPTION_KEY` | (from GitHub Secret) |
 | `N8N_USER_MANAGEMENT_DISABLED` | `true` |
 | `N8N_DIAGNOSTICS_ENABLED` | `false` |
@@ -247,7 +247,7 @@ caddy → outline (healthy), oauth2-proxy (healthy), shlink (healthy), shlink-we
 
 - `docker-compose.yml` — add n8n container; add `n8n_data` to top-level volumes; add `init-n8n-db.sql` mount on postgres; update Caddy `depends_on` to include n8n; update OAuth2 Proxy env vars (remove `REDIRECT_URL`, add `COOKIE_DOMAINS` and `WHITELIST_DOMAINS`)
 - `docker-compose.local.yml` — add n8n for local dev (if applicable)
-- `Caddyfile` — add `auto.makenashville.org` site block with webhook exceptions and `@unauthorized` redirect
+- `Caddyfile` — add `automations.makenashville.org` site block with webhook exceptions and `@unauthorized` redirect
 - `Caddyfile.local` — add local n8n route (if applicable)
 - `.env.example` — add `N8N_DB_PASSWORD`, `N8N_ENCRYPTION_KEY`
 - `.env.production.example` — add n8n production variables
@@ -266,7 +266,7 @@ caddy → outline (healthy), oauth2-proxy (healthy), shlink (healthy), shlink-we
 
 ## Manual Prerequisites (Before Deploy)
 
-1. Create DNS A record: `auto.makenashville.org` → VM's external IP
+1. Create DNS A record: `automations.makenashville.org` → VM's external IP
 2. Add `N8N_DB_PASSWORD` and `N8N_ENCRYPTION_KEY` to GitHub repository secrets
-3. Add `https://auto.makenashville.org/oauth2/callback` as an authorized redirect URI in the existing Google OAuth app (Cloud Console)
+3. Add `https://automations.makenashville.org/oauth2/callback` as an authorized redirect URI in the existing Google OAuth app (Cloud Console)
 4. No new OAuth app or proxy instance needed — reuses the existing OAuth2 Proxy with cross-subdomain cookie config

@@ -4,7 +4,7 @@
 
 **Goal:** Add n8n as a self-hosted workflow automation platform to the Make Nashville Docker Compose stack, with OAuth2-protected UI and public webhook endpoints.
 
-**Architecture:** n8n container with Postgres backend, routed via Caddy at `auto.makenashville.org`. UI protected by the existing shared OAuth2 Proxy (reconfigured for cross-subdomain cookies). Webhooks are public. 2GB memory limit.
+**Architecture:** n8n container with Postgres backend, routed via Caddy at `automations.makenashville.org`. UI protected by the existing shared OAuth2 Proxy (reconfigured for cross-subdomain cookies). Webhooks are public. 2GB memory limit.
 
 **Tech Stack:** n8n (stable), PostgreSQL 16, Caddy 2, OAuth2 Proxy v7.7.1, GitHub Actions, GCP Compute Engine
 
@@ -99,10 +99,10 @@ Add the n8n service block after the `oauth2-proxy` service (before `postgres`):
       - DB_POSTGRESDB_DATABASE=n8n
       - DB_POSTGRESDB_USER=n8n
       - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD:-n8n}
-      - N8N_HOST=auto.makenashville.org
+      - N8N_HOST=automations.makenashville.org
       - N8N_PROTOCOL=https
       - N8N_PORT=5678
-      - WEBHOOK_URL=https://auto.makenashville.org
+      - WEBHOOK_URL=https://automations.makenashville.org
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-placeholder-change-me}
       - N8N_USER_MANAGEMENT_DISABLED=true
       - N8N_DIAGNOSTICS_ENABLED=false
@@ -169,13 +169,13 @@ git commit -m "feat(n8n): add n8n service to docker-compose with cross-subdomain
 **Files:**
 - Modify: `Caddyfile` (add new site block after line 47)
 
-- [ ] **Step 1: Add auto.makenashville.org site block**
+- [ ] **Step 1: Add automations.makenashville.org site block**
 
 Append after the `to.makenashville.org, go.makenashville.org` block (after line 47):
 
 ```caddyfile
 
-auto.makenashville.org {
+automations.makenashville.org {
 	header {
 		X-Frame-Options SAMEORIGIN
 		X-Content-Type-Options nosniff
@@ -203,7 +203,7 @@ auto.makenashville.org {
 				status 401
 			}
 			handle_response @unauthorized {
-				redir * https://auto.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
+				redir * https://automations.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
 			}
 		}
 		reverse_proxy n8n:5678
@@ -215,7 +215,7 @@ auto.makenashville.org {
 
 ```bash
 git add Caddyfile
-git commit -m "feat(n8n): add Caddy routing for auto.makenashville.org with webhook bypass"
+git commit -m "feat(n8n): add Caddy routing for automations.makenashville.org with webhook bypass"
 ```
 
 ---
@@ -314,11 +314,11 @@ sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_datab
 
 In the Caddyfile heredoc (lines 43-91), make two changes:
 
-(a) Append the `auto.makenashville.org` site block before the closing `CADDY` delimiter (after the `to.makenashville.org` block):
+(a) Append the `automations.makenashville.org` site block before the closing `CADDY` delimiter (after the `to.makenashville.org` block):
 
 ```caddyfile
 
-auto.makenashville.org {
+automations.makenashville.org {
 	header {
 		X-Frame-Options SAMEORIGIN
 		X-Content-Type-Options nosniff
@@ -346,7 +346,7 @@ auto.makenashville.org {
 				status 401
 			}
 			handle_response @unauthorized {
-				redir * https://auto.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
+				redir * https://automations.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
 			}
 		}
 		reverse_proxy n8n:5678
@@ -392,10 +392,10 @@ In the docker-compose heredoc (lines 143-270), make these changes:
       - DB_POSTGRESDB_DATABASE=n8n
       - DB_POSTGRESDB_USER=n8n
       - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD}
-      - N8N_HOST=auto.makenashville.org
+      - N8N_HOST=automations.makenashville.org
       - N8N_PROTOCOL=https
       - N8N_PORT=5678
-      - WEBHOOK_URL=https://auto.makenashville.org
+      - WEBHOOK_URL=https://automations.makenashville.org
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       - N8N_USER_MANAGEMENT_DISABLED=true
       - N8N_DIAGNOSTICS_ENABLED=false
@@ -497,7 +497,7 @@ N8NSQL
 
 - [ ] **Step 4: Update Caddyfile heredoc**
 
-Same as Task 5 Step 3 — add `auto.makenashville.org` block before the closing `CADDY` delimiter.
+Same as Task 5 Step 3 — add `automations.makenashville.org` block before the closing `CADDY` delimiter.
 
 - [ ] **Step 5: Update .env heredoc**
 
@@ -569,7 +569,7 @@ chmod +x /opt/outline/backup.sh
 Add a new log line after line 542 (`log "Shlink web client at https://links.makenashville.org"`):
 
 ```bash
-log "n8n workflow automation at https://auto.makenashville.org"
+log "n8n workflow automation at https://automations.makenashville.org"
 ```
 
 - [ ] **Step 8: Commit**
@@ -619,7 +619,7 @@ git commit -m "feat(n8n): add n8n secrets and init script to deploy workflow"
 ### Task 8: Update README
 
 **Files:**
-- Modify: `README.md` (add n8n to services list, mention auto.makenashville.org, document new secrets)
+- Modify: `README.md` (add n8n to services list, mention automations.makenashville.org, document new secrets)
 
 - [ ] **Step 1: Read current README**
 
@@ -630,7 +630,7 @@ Read `README.md` to understand the current structure and where to add n8n docume
 Add n8n to:
 - The services list/overview section
 - The environment variables / secrets section (document `N8N_DB_PASSWORD` and `N8N_ENCRYPTION_KEY`)
-- The URLs/endpoints section (mention `auto.makenashville.org`)
+- The URLs/endpoints section (mention `automations.makenashville.org`)
 - Any architecture diagram if one exists
 
 - [ ] **Step 3: Commit**

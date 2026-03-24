@@ -46,7 +46,7 @@ to.makenashville.org, go.makenashville.org {
 	reverse_proxy shlink:8080
 }
 
-auto.makenashville.org {
+automations.makenashville.org {
 	header {
 		X-Frame-Options SAMEORIGIN
 		X-Content-Type-Options nosniff
@@ -74,7 +74,7 @@ auto.makenashville.org {
 				status 401
 			}
 			handle_response @unauthorized {
-				redir * https://auto.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
+				redir * https://automations.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
 			}
 		}
 		reverse_proxy n8n:5678

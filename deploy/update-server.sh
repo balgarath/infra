@@ -113,7 +113,7 @@ to.makenashville.org, go.makenashville.org {
 	reverse_proxy shlink:8080
 }
 
-auto.makenashville.org {
+automations.makenashville.org {
 	header {
 		X-Frame-Options SAMEORIGIN
 		X-Content-Type-Options nosniff
@@ -141,7 +141,7 @@ auto.makenashville.org {
 				status 401
 			}
 			handle_response @unauthorized {
-				redir * https://auto.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
+				redir * https://automations.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
 			}
 		}
 		reverse_proxy n8n:5678
@@ -344,10 +344,10 @@ services:
       - DB_POSTGRESDB_DATABASE=n8n
       - DB_POSTGRESDB_USER=n8n
       - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD}
-      - N8N_HOST=auto.makenashville.org
+      - N8N_HOST=automations.makenashville.org
       - N8N_PROTOCOL=https
       - N8N_PORT=5678
-      - WEBHOOK_URL=https://auto.makenashville.org
+      - WEBHOOK_URL=https://automations.makenashville.org
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       - N8N_USER_MANAGEMENT_DISABLED=true
       - N8N_DIAGNOSTICS_ENABLED=false

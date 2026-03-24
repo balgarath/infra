@@ -18,8 +18,8 @@ Docker Compose setup for [Outline](https://www.getoutline.com/) wiki, [n8n](http
 | Service | URL | Notes |
 |---------|-----|-------|
 | Outline wiki | `https://wiki.makenashville.org` | OAuth2 protected |
-| n8n workflow editor | `https://auto.makenashville.org` | OAuth2 protected |
-| n8n webhooks | `https://auto.makenashville.org/webhook/*` | Public |
+| n8n workflow editor | `https://automations.makenashville.org` | OAuth2 protected |
+| n8n webhooks | `https://automations.makenashville.org/webhook/*` | Public |
 
 ## Local Development
 
