@@ -27,6 +27,8 @@ OAUTH2_CLIENT_SECRET=$(get_metadata "oauth2-client-secret")
 OAUTH2_COOKIE_SECRET=$(get_metadata "oauth2-cookie-secret")
 OAUTH2_GOOGLE_GROUP=$(get_metadata "oauth2-google-group")
 OAUTH2_GOOGLE_ADMIN_EMAIL=$(get_metadata "oauth2-google-admin-email")
+N8N_DB_PASSWORD=$(get_metadata "n8n-db-password")
+N8N_ENCRYPTION_KEY=$(get_metadata "n8n-encryption-key")
 
 # Create Shlink database if it doesn't exist on existing Postgres instances
 echo "Ensuring Shlink database exists..."
@@ -36,6 +38,14 @@ sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles
 sudo docker compose exec -T postgres psql -U outline -c "ALTER USER shlink WITH PASSWORD '${SHLINK_DB_PASSWORD}';"
 sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='shlink'" | grep -q 1 || \
     sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE shlink OWNER shlink;"
+
+# Create n8n database if it doesn't exist
+echo "Ensuring n8n database exists..."
+sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles WHERE rolname='n8n'" | grep -q 1 || \
+    sudo docker compose exec -T postgres psql -U outline -c "CREATE USER n8n WITH PASSWORD '${N8N_DB_PASSWORD}';"
+sudo docker compose exec -T postgres psql -U outline -c "ALTER USER n8n WITH PASSWORD '${N8N_DB_PASSWORD}';"
+sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='n8n'" | grep -q 1 || \
+    sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE n8n OWNER n8n;"
 
 echo "Updating configuration for domain: $DOMAIN"
 
@@ -88,6 +98,41 @@ to.makenashville.org, go.makenashville.org {
 	}
 	reverse_proxy shlink:8080
 }
+
+auto.makenashville.org {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180
+	}
+
+	@webhooks {
+		path /webhook/* /webhook-test/*
+	}
+	handle @webhooks {
+		reverse_proxy n8n:5678
+	}
+
+	handle {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			header_up X-Forwarded-Host {host}
+			copy_headers X-Auth-Request-User X-Auth-Request-Email
+			@unauthorized {
+				status 401
+			}
+			handle_response @unauthorized {
+				redir * https://auto.makenashville.org/oauth2/start?rd={scheme}://{host}{uri}
+			}
+		}
+		reverse_proxy n8n:5678
+	}
+}
 CADDY
 
 # Update .env file
@@ -132,6 +177,10 @@ SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET}
 
 # Shlink
 SHLINK_DB_PASSWORD=${SHLINK_DB_PASSWORD}
+
+# n8n
+N8N_DB_PASSWORD=${N8N_DB_PASSWORD}
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
 ENV
 
 sudo chmod 600 .env
@@ -163,6 +212,8 @@ services:
         condition: service_healthy
       oauth2-proxy:
         condition: service_started
+      n8n:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
       interval: 5s
@@ -232,14 +283,50 @@ services:
       - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_CLIENT_SECRET}
       - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_COOKIE_SECRET}
       - OAUTH2_PROXY_COOKIE_SECURE=true
+      - OAUTH2_PROXY_COOKIE_DOMAINS=.makenashville.org
+      - OAUTH2_PROXY_WHITELIST_DOMAINS=.makenashville.org
       - OAUTH2_PROXY_EMAIL_DOMAINS=makenashville.org
       - OAUTH2_PROXY_GOOGLE_GROUPS=${OAUTH2_GOOGLE_GROUP}
       - OAUTH2_PROXY_GOOGLE_ADMIN_EMAIL=${OAUTH2_GOOGLE_ADMIN_EMAIL}
       - OAUTH2_PROXY_GOOGLE_SERVICE_ACCOUNT_JSON=/etc/oauth2-proxy/google-sa-key.json
-      - OAUTH2_PROXY_REDIRECT_URL=https://links.makenashville.org/oauth2/callback
       - OAUTH2_PROXY_UPSTREAM=static://202
       - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
       - OAUTH2_PROXY_REVERSE_PROXY=true
+
+
+  n8n:
+    image: n8nio/n8n:stable
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=n8n
+      - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD}
+      - N8N_HOST=auto.makenashville.org
+      - N8N_PROTOCOL=https
+      - N8N_PORT=5678
+      - WEBHOOK_URL=https://auto.makenashville.org
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_USER_MANAGEMENT_DISABLED=true
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - GENERIC_TIMEZONE=America/Chicago
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:5678/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   postgres:
     image: postgres:16-alpine
@@ -248,6 +335,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-shlink-db.sql:/docker-entrypoint-initdb.d/init-shlink-db.sql:ro
+      - ./init-n8n-db.sql:/docker-entrypoint-initdb.d/init-n8n-db.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "outline"]
       interval: 5s
@@ -267,6 +355,7 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  n8n_data:
 COMPOSE
 
 # Write backup script
@@ -298,6 +387,12 @@ docker compose -f /opt/outline/docker-compose.yml exec -T postgres pg_dump -U sh
 gcloud storage cp "\${SHLINK_BACKUP_FILE}" "\${BUCKET}/shlink-\${TIMESTAMP}.sql.gz"
 rm -f "\${SHLINK_BACKUP_FILE}"
 
+# Backup n8n database
+N8N_BACKUP_FILE="/tmp/n8n-\${TIMESTAMP}.sql.gz"
+docker compose -f /opt/outline/docker-compose.yml exec -T postgres pg_dump -U n8n n8n | gzip > "\${N8N_BACKUP_FILE}"
+gcloud storage cp "\${N8N_BACKUP_FILE}" "\${BUCKET}/n8n-\${TIMESTAMP}.sql.gz"
+rm -f "\${N8N_BACKUP_FILE}"
+
 cutoff=\$(date -d "-\${RETAIN_DAYS} days" +%s)
 gcloud storage ls -l "\${BUCKET}/" 2>/dev/null | while read -r line; do
   file=\$(echo "\$line" | awk "{print \\\$NF}")
@@ -309,7 +404,7 @@ gcloud storage ls -l "\${BUCKET}/" 2>/dev/null | while read -r line; do
   fi
 done
 
-echo "[\$(date)] Backup complete: outline and shlink \${TIMESTAMP}"
+echo "[\$(date)] Backup complete: outline, shlink, and n8n \${TIMESTAMP}"
 BACKUPSCRIPT
 sudo chmod +x /opt/outline/backup.sh
 
