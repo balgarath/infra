@@ -258,11 +258,10 @@ Files that need modification (following existing patterns):
 
 **VM upgrade required:**
 
-- **Current:** e2-medium (2 vCPU, 4GB RAM, 50GB disk)
-- **Recommended:** e2-highmem-2 (2 vCPU, 16GB RAM) — more cost-effective than e2-standard-4 since the bottleneck is memory, not CPU. 700+ members with ~30-50 concurrent users at peak doesn't need 4 vCPUs.
-- **Disk:** increase from 50GB to 100GB if hosting video locally; 75GB if videos are embedded from YouTube/Vimeo.
-
-Moodle alone needs 2-4GB RAM. With existing services, 16GB provides comfortable headroom before the eventual K8s migration.
+- **Previous:** e2-medium (2 vCPU, 4GB RAM, 50GB disk)
+- **Current:** e2-standard-2 (2 vCPU, 8GB RAM, 75GB disk) — upgraded 2026-03-23
+- 8GB is sufficient for 20-50 concurrent users (of 700+ total members). Moodle needs ~2-4GB RAM, existing services ~2-3GB, leaving comfortable headroom.
+- Can resize to e2-highmem-2 (16GB) later if concurrency grows significantly.
 
 ## Monitoring
 
