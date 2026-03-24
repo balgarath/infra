@@ -45,3 +45,13 @@ to.makenashville.org, go.makenashville.org {
 	}
 	reverse_proxy shlink:8080
 }
+
+learn.makenashville.org {
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	reverse_proxy moodle:8080
+}
