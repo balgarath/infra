@@ -196,7 +196,7 @@ Add `n8n` database to the existing backup cron. Same pattern as Outline and Shli
 ```bash
 # Added alongside existing outline and shlink dumps:
 docker compose exec -T postgres pg_dump -U n8n n8n | gzip > "/tmp/n8n-${TIMESTAMP}.sql.gz"
-gsutil cp "/tmp/n8n-${TIMESTAMP}.sql.gz" "gs://${GCS_BUCKET}/backups/n8n-${TIMESTAMP}.sql.gz"
+gcloud storage cp "/tmp/n8n-${TIMESTAMP}.sql.gz" "gs://${GCS_BUCKET}/backups/n8n-${TIMESTAMP}.sql.gz"
 rm -f "/tmp/n8n-${TIMESTAMP}.sql.gz"
 ```
 
