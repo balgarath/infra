@@ -20,6 +20,8 @@ services:
         condition: service_healthy
       oauth2-proxy:
         condition: service_started
+      moodle:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:2019/config/ || exit 1"]
       interval: 5s
@@ -98,6 +100,59 @@ services:
       - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
       - OAUTH2_PROXY_REVERSE_PROXY=true
 
+  moodle:
+    image: bitnami/moodle:4.5
+    restart: unless-stopped
+    environment:
+      - MOODLE_DATABASE_TYPE=pgsql
+      - MOODLE_DATABASE_HOST=postgres
+      - MOODLE_DATABASE_PORT_NUMBER=5432
+      - MOODLE_DATABASE_NAME=moodle
+      - MOODLE_DATABASE_USER=moodle
+      - MOODLE_DATABASE_PASSWORD=${MOODLE_DB_PASSWORD}
+      - MOODLE_USERNAME=admin
+      - MOODLE_PASSWORD=${MOODLE_ADMIN_PASSWORD}
+      - MOODLE_EMAIL=${MOODLE_ADMIN_EMAIL}
+      - MOODLE_HOST=learn.makenashville.org
+      - MOODLE_SITE_NAME=Make Nashville Learning
+      - MOODLE_PORT_NUMBER=8080
+      - MOODLE_REVERSEPROXY=true
+      - MOODLE_SSLPROXY=true
+      - MOODLE_LANG=en
+      - PHP_MEMORY_LIMIT=512M
+    volumes:
+      - moodle_data:/bitnami/moodledata
+      - moodle_local:/bitnami/moodle/local
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/login/index.php || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  grit-provisioner:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    volumes:
+      - ./deploy/grit-provisioner:/app:ro
+    command: ["python", "/app/server.py"]
+    environment:
+      - GRIT_API_URL=${GRIT_API_URL}
+      - GRIT_API_KEY=${GRIT_API_KEY}
+      - WEBHOOK_SECRET=${MOODLE_WEBHOOK_SECRET}
+      - COURSE_TOOL_MAP_PATH=/app/course-tool-map.json
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -124,3 +179,5 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  moodle_data:
+  moodle_local:
