@@ -1,0 +1,4 @@
+{
+  "EXAMPLE_3": {"grit_tool": "laser_cutter", "name": "Laser Cutter"},
+  "EXAMPLE_5": {"grit_tool": "cnc_router", "name": "CNC Router"}
+}
