@@ -36,30 +36,25 @@ MOODLE_WEBHOOK_SECRET=$(get_metadata "moodle-webhook-secret")
 GRIT_API_URL=$(get_metadata "grit-api-url")
 GRIT_API_KEY=$(get_metadata "grit-api-key")
 
-# Create Shlink database if it doesn't exist on existing Postgres instances
-echo "Ensuring Shlink database exists..."
-sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles WHERE rolname='shlink'" | grep -q 1 || \
-    sudo docker compose exec -T postgres psql -U outline -c "CREATE USER shlink WITH PASSWORD '${SHLINK_DB_PASSWORD}';"
-# Always update the Shlink password so changes propagate correctly
-sudo docker compose exec -T postgres psql -U outline -c "ALTER USER shlink WITH PASSWORD '${SHLINK_DB_PASSWORD}';"
-sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='shlink'" | grep -q 1 || \
-    sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE shlink OWNER shlink;"
+# Create databases if postgres is running (skip if it's down — they'll be created after restart)
+if sudo docker compose exec -T postgres pg_isready -U outline > /dev/null 2>&1; then
+    echo "Ensuring Shlink database exists..."
+    sudo docker compose exec -T postgres psql -U outline -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='shlink') THEN CREATE USER shlink WITH PASSWORD '${SHLINK_DB_PASSWORD}'; END IF; END \$\$;"
+    sudo docker compose exec -T postgres psql -U outline -c "ALTER USER shlink WITH PASSWORD '${SHLINK_DB_PASSWORD}';"
+    sudo docker compose exec -T postgres psql -U outline -c "SELECT 'CREATE DATABASE shlink OWNER shlink' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='shlink')\gexec" 2>/dev/null || true
 
-# Create n8n database if it doesn't exist
-echo "Ensuring n8n database exists..."
-sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles WHERE rolname='n8n'" | grep -q 1 || \
-    sudo docker compose exec -T postgres psql -U outline -c "CREATE USER n8n WITH PASSWORD '${N8N_DB_PASSWORD}';"
-sudo docker compose exec -T postgres psql -U outline -c "ALTER USER n8n WITH PASSWORD '${N8N_DB_PASSWORD}';"
-sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='n8n'" | grep -q 1 || \
-    sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE n8n OWNER n8n;"
+    echo "Ensuring n8n database exists..."
+    sudo docker compose exec -T postgres psql -U outline -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='n8n') THEN CREATE USER n8n WITH PASSWORD '${N8N_DB_PASSWORD}'; END IF; END \$\$;"
+    sudo docker compose exec -T postgres psql -U outline -c "ALTER USER n8n WITH PASSWORD '${N8N_DB_PASSWORD}';"
+    sudo docker compose exec -T postgres psql -U outline -c "SELECT 'CREATE DATABASE n8n OWNER n8n' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='n8n')\gexec" 2>/dev/null || true
 
-# Create Moodle database if it doesn't exist on existing Postgres instances
-echo "Ensuring Moodle database exists..."
-sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_roles WHERE rolname='moodle'" | grep -q 1 || \
-    sudo docker compose exec -T postgres psql -U outline -c "CREATE USER moodle WITH PASSWORD '${MOODLE_DB_PASSWORD}';"
-sudo docker compose exec -T postgres psql -U outline -c "ALTER USER moodle WITH PASSWORD '${MOODLE_DB_PASSWORD}';"
-sudo docker compose exec -T postgres psql -U outline -tc "SELECT 1 FROM pg_database WHERE datname='moodle'" | grep -q 1 || \
-    sudo docker compose exec -T postgres psql -U outline -c "CREATE DATABASE moodle OWNER moodle;"
+    echo "Ensuring Moodle database exists..."
+    sudo docker compose exec -T postgres psql -U outline -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='moodle') THEN CREATE USER moodle WITH PASSWORD '${MOODLE_DB_PASSWORD}'; END IF; END \$\$;"
+    sudo docker compose exec -T postgres psql -U outline -c "ALTER USER moodle WITH PASSWORD '${MOODLE_DB_PASSWORD}';"
+    sudo docker compose exec -T postgres psql -U outline -c "SELECT 'CREATE DATABASE moodle OWNER moodle' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='moodle')\gexec" 2>/dev/null || true
+else
+    echo "Postgres not running — skipping DB creation (will retry after restart)"
+fi
 
 echo "Updating configuration for domain: $DOMAIN"
 
@@ -155,7 +150,7 @@ learn.makenashville.org {
 		Referrer-Policy strict-origin-when-cross-origin
 		-Server
 	}
-	reverse_proxy moodle:8080
+	reverse_proxy moodle:80
 }
 CADDY
 
@@ -365,30 +360,25 @@ services:
       start_period: 30s
 
   moodle:
-    image: bitnami/moodle:4.5
+    build: ./moodle-docker
     restart: unless-stopped
     environment:
-      - MOODLE_DATABASE_TYPE=pgsql
-      - MOODLE_DATABASE_HOST=postgres
-      - MOODLE_DATABASE_PORT_NUMBER=5432
-      - MOODLE_DATABASE_NAME=moodle
-      - MOODLE_DATABASE_USER=moodle
-      - MOODLE_DATABASE_PASSWORD=${MOODLE_DB_PASSWORD}
-      - MOODLE_USERNAME=admin
-      - MOODLE_PASSWORD=${MOODLE_ADMIN_PASSWORD}
-      - MOODLE_EMAIL=${MOODLE_ADMIN_EMAIL}
-      - MOODLE_HOST=learn.makenashville.org
-      - MOODLE_SITE_NAME=Make Nashville Learning
-      - MOODLE_PORT_NUMBER=8080
-      - MOODLE_REVERSEPROXY=true
-      - MOODLE_SSLPROXY=true
-      - MOODLE_LANG=en
-      - PHP_MEMORY_LIMIT=512M
+      - MOODLE_DB_HOST=postgres
+      - MOODLE_DB_PORT=5432
+      - MOODLE_DB_NAME=moodle
+      - MOODLE_DB_USER=moodle
+      - MOODLE_DB_PASSWORD=${MOODLE_DB_PASSWORD}
+      - MOODLE_WWWROOT=https://learn.makenashville.org
+      - MOODLE_ADMIN_PASSWORD=${MOODLE_ADMIN_PASSWORD}
+      - MOODLE_ADMIN_EMAIL=${MOODLE_ADMIN_EMAIL}
+      - MOODLE_REDIS_HOST=redis
+      - MOODLE_REDIS_PORT=6379
+      - MOODLE_REDIS_DB=3
     volumes:
-      - moodle_data:/bitnami/moodledata
-      - moodle_local:/bitnami/moodle/local
+      - moodle_data:/var/www/moodledata
+      - moodle_local:/var/www/html/local
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/login/index.php || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -H 'X-Forwarded-For: 127.0.0.1' http://localhost/login/index.php || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 10
@@ -517,7 +507,7 @@ sudo chmod +x /opt/outline/backup.sh
 # Restart services to pick up new config
 echo "Restarting services..."
 sudo docker compose down --remove-orphans
-sudo docker compose up -d
+sudo docker compose up -d --build
 
 # Generate Shlink API key if none exist
 echo "Checking Shlink API keys..."
