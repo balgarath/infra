@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GRIT Provisioner — bridges Moodle course completion webhooks to GRIT API."""
 
+import hmac
 import json
 import logging
 import os
@@ -101,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # Validate webhook secret
         secret = self.headers.get("X-Webhook-Secret", "")
-        if secret != WEBHOOK_SECRET:
+        if not hmac.compare_digest(secret, WEBHOOK_SECRET):
             self._drain_request_body()
             log.warning("Invalid webhook secret from %s", self.client_address[0])
             self._respond(403, {"error": "forbidden"})
@@ -131,6 +132,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def create_server(port=8000):
+    if not WEBHOOK_SECRET:
+        raise RuntimeError("WEBHOOK_SECRET environment variable must be set")
     Handler.course_map = load_course_map()
     server = HTTPServer(("0.0.0.0", port), Handler)
     return server
